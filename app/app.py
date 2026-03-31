@@ -1,26 +1,41 @@
+import logging
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.routes import health, data, prediction
+from app.scheduler import start_scheduler, stop_scheduler
+from app.services.training_service import run_training_pipeline  # ← add this
+
+logging.basicConfig(level=logging.INFO)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    try:
+        run_training_pipeline()
+    except Exception as e:
+        logging.error(f"Startup training failed: {e}")
+
+    start_scheduler()
+    yield
+    stop_scheduler()
+
 
 app = FastAPI(
-    title       = "Power Usage Prediction API",
-    description = "REST API for Nagios-based power usage forecasting using Machine Learning",
-    version     = "1.0.0",
-    docs_url    = "/docs",
-    redoc_url   = "/redoc",
+    title    = "Power Usage Prediction API",
+    version  = "1.0.0",
+    docs_url = "/docs",
+    redoc_url= "/redoc",
+    lifespan = lifespan,          # ← also make sure lifespan is passed here
 )
 
-# ── CORS — allow frontend dev servers ──
 app.add_middleware(
     CORSMiddleware,
-    allow_origins     = ["*"],   
-    allow_credentials = True,
-    allow_methods     = ["*"],
-    allow_headers     = ["*"],
+    allow_origins=["*"], allow_credentials=True,
+    allow_methods=["*"], allow_headers=["*"],
 )
 
-# ── Register routers ──
 app.include_router(health.router)
 app.include_router(data.router)
 app.include_router(prediction.router)

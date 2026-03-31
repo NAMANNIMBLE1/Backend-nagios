@@ -4,7 +4,7 @@ load_dotenv()
 
 def get_config():
     # required .env values
-    required_vars = ["DB_HOST", "DB_USER", "DB_PASSWORD","DB_NAME","FORECAST_DAYS"]
+    required_vars = ["DB_HOST", "DB_USER", "DB_PASSWORD","DB_NAME","FORECAST_DAYS","RETRAIN_HOUR","RETRAIN_MINUTE"]
     config = {}
 
     for credential in required_vars:

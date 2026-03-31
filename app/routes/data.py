@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Query
 import numpy as np
 import pandas as pd
 
-from app.controllers.data_processing import prediction_tabular_data
+from app.cache import model_cache
 from db.db_connection import get_sql_data
 from app.schemas.response import (
     RawDataResponse,
@@ -13,9 +13,18 @@ from app.schemas.response import (
 router = APIRouter(prefix="/data", tags=["Data"])
 
 
+def _require_cache() -> dict:
+    """Raise 503 if the model hasn't been trained yet."""
+    if not model_cache.is_ready():
+        raise HTTPException(
+            status_code = 503,
+            detail      = "Model not ready — training is still running. Retry in a moment.",
+        )
+    return model_cache.get_cache()
+
 
 # GET /data/raw
-# Returns raw DB rows with unparsed perfdata
+# Still hits DB directly — this is a diagnostic/debug endpoint, not hot path
 
 @router.get("/raw", response_model=RawDataResponse, summary="Raw rows from database")
 def get_raw_data(
@@ -32,7 +41,6 @@ def get_raw_data(
     for row in rows[:limit]:
         record = {}
         for col, val in zip(columns, row):
-            # serialize datetime → string
             record[col] = str(val) if not isinstance(val, (int, float, str, type(None))) else val
         records.append(record)
 
@@ -43,13 +51,12 @@ def get_raw_data(
     )
 
 
+# GET /data/processed
 
 @router.get("/processed", response_model=ProcessedDataResponse, summary="Processed X / y arrays")
 def get_processed_data():
-    try:
-        data = prediction_tabular_data()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
+    cache = _require_cache()
+    data  = cache["data"]
 
     X             = data["X"]
     y             = data["y"]
@@ -69,18 +76,16 @@ def get_processed_data():
     )
 
 
+# GET /data/stats
+
 @router.get("/stats", response_model=FeatureStatsResponse, summary="Target metric statistics")
 def get_feature_stats():
-    try:
-        data = prediction_tabular_data()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
-
+    cache      = _require_cache()
+    data       = cache["data"]
     df_full    = data["df_full"]
     target_col = data["target_col"]
     y          = data["y"]
 
-    # Check frequency
     freq = int(
         df_full["check_time"]
         .sort_values()
@@ -96,49 +101,47 @@ def get_feature_stats():
     )
 
     return FeatureStatsResponse(
-        target_col             = target_col,
-        y_min                  = float(np.min(y)),
-        y_max                  = float(np.max(y)),
-        y_mean                 = float(np.mean(y)),
-        y_std                  = float(np.std(y)),
-        total_rows             = len(y),
-        date_range_start       = str(df_full["check_time"].min()),
-        date_range_end         = str(df_full["check_time"].max()),
-        check_frequency_minutes= freq,
-        hosts                  = hosts,
+        target_col              = target_col,
+        y_min                   = float(np.min(y)),
+        y_max                   = float(np.max(y)),
+        y_mean                  = float(np.mean(y)),
+        y_std                   = float(np.std(y)),
+        total_rows              = len(y),
+        date_range_start        = str(df_full["check_time"].min()),
+        date_range_end          = str(df_full["check_time"].max()),
+        check_frequency_minutes = freq,
+        hosts                   = hosts,
     )
 
+
+# GET /data/timeseries
 
 @router.get("/timeseries", summary="Full historical timeseries for charting")
 def get_timeseries(
     host: str = Query(default=None, description="Filter by host name")
 ):
-    try:
-        data = prediction_tabular_data()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
-
+    cache      = _require_cache()
+    data       = cache["data"]
     df_full    = data["df_full"]
     target_col = data["target_col"]
     df_model   = data["df_model"]
 
-    # Merge check_time back into df_model
-    df = df_full[["check_time"]].copy()
+    df = df_full[["check_time", "host_name"]].copy()
     df[target_col] = df_model[target_col].reindex(df_full.index).values
 
     if host and "host_name" in df_full.columns:
-        mask = df_full["host_name"] == host
-        df   = df[mask]
+        df = df[df["host_name"] == host]
 
     df = df.dropna(subset=[target_col])
 
     return {
-        "target_col": target_col,
+        "target_col"  : target_col,
         "total_points": len(df),
-        "series": [
+        "cached_at"   : model_cache.get_cached_at(),
+        "series"      : [
             {
                 "timestamp": str(row["check_time"]),
-                "value": round(float(row[target_col]), 4),
+                "value"    : round(float(row[target_col]), 4),
             }
             for _, row in df.iterrows()
         ],

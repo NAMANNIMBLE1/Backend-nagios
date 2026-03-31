@@ -1,9 +1,9 @@
 from fastapi import APIRouter, HTTPException, Query
 import numpy as np
 import pandas as pd
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-from app.controllers.data_processing import prediction_tabular_data
-from app.controllers.predict import train, forecast
+
+from app.cache import model_cache
+from app.controllers.predict import forecast
 from app.schemas.response import (
     ModelMetricsResponse,
     ForecastResponse,
@@ -11,27 +11,32 @@ from app.schemas.response import (
     ForecastSummaryResponse,
     DailyAverage,
 )
-from config.get_config import get_config
 
 router = APIRouter(prefix="/predict", tags=["Prediction"])
 
 
-def _get_trained_model(days_ahead: int = 7):
-    """Shared helper — loads data, trains model, returns everything."""
-    data                          = prediction_tabular_data()
-    X, y                          = data["X"], data["y"]
-    model, scaler, y_test, y_pred = train(X, y)
+def _require_cache() -> dict:
+    """Raise 503 if the model hasn't been trained yet."""
+    if not model_cache.is_ready():
+        raise HTTPException(
+            status_code = 503,
+            detail      = "Model not ready — training is still running. Retry in a moment.",
+        )
+    return model_cache.get_cache()
 
-    # forecast() may return (df, days) or just df depending on your controller version
-    result = forecast(model, scaler, data, days_ahead=days_ahead)
-    if isinstance(result, tuple):
-        forecast_df, days_ahead = result
-    else:
-        forecast_df = result
-        days_ahead  = int(days_ahead)
 
-    return data, model, scaler, y_test, y_pred, forecast_df, days_ahead
+def _get_forecast_df(cache: dict, days: int) -> tuple:
+    """
+    Reuse the cached forecast when days matches what was trained,
+    otherwise re-run forecast() from the cached model (no DB hit).
+    """
+    if days == cache["days_ahead"]:
+        return cache["forecast_df"], cache["days_ahead"]
 
+    forecast_df, days_ahead = forecast(
+        cache["model"], cache["scaler"], cache["data"], days_ahead=days
+    )
+    return forecast_df, days_ahead
 
 
 # GET /predict/metrics
@@ -40,23 +45,21 @@ def _get_trained_model(days_ahead: int = 7):
 def get_model_metrics():
     """MAE, RMSE and R² on the 20% held-out test set."""
     try:
-        data                          = prediction_tabular_data()
-        X, y                          = data["X"], data["y"]
-        model, scaler, y_test, y_pred = train(X, y)
-
-        split = int(len(X) * 0.8)
-
-        return ModelMetricsResponse(
-            target_col = data["target_col"],
-            mae        = round(float(mean_absolute_error(y_test, y_pred)), 4),
-            rmse       = round(float(np.sqrt(mean_squared_error(y_test, y_pred))), 4),
-            r2         = round(float(r2_score(y_test, y_pred)), 4),
-            train_rows = split,
-            test_rows  = len(X) - split,
-        )
+        cache   = _require_cache()
+        metrics = cache["metrics"]
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+    return ModelMetricsResponse(
+        target_col = cache["data"]["target_col"],
+        mae        = metrics["mae"],
+        rmse       = metrics["rmse"],
+        r2         = metrics["r2"],
+        train_rows = metrics["train_rows"],
+        test_rows  = metrics["test_rows"],
+    )
 
 
 # GET /predict/forecast?days=7
@@ -67,11 +70,14 @@ def get_forecast(
 ):
     """Every 5-minute predicted value for the next N days."""
     try:
-        data, model, scaler, y_test, y_pred, forecast_df, days_ahead = _get_trained_model(days)
+        cache                   = _require_cache()
+        forecast_df, days_ahead = _get_forecast_df(cache, days)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    target_col = data["target_col"]
+    target_col = cache["data"]["target_col"]
     pred_col   = f"{target_col}_pred"
 
     return ForecastResponse(
@@ -93,7 +99,6 @@ def get_forecast(
     )
 
 
-
 # GET /predict/summary?days=7
 
 @router.get("/summary", response_model=ForecastSummaryResponse, summary="Daily aggregated forecast")
@@ -102,13 +107,17 @@ def get_forecast_summary(
 ):
     """One row per day with avg/min/max — lighter payload for dashboards."""
     try:
-        data, model, scaler, y_test, y_pred, forecast_df, days_ahead = _get_trained_model(days)
+        cache                   = _require_cache()
+        forecast_df, days_ahead = _get_forecast_df(cache, days)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    target_col = data["target_col"]
-    pred_col   = f"{target_col}_pred"
+    target_col  = cache["data"]["target_col"]
+    pred_col    = f"{target_col}_pred"
 
+    forecast_df = forecast_df.copy()
     forecast_df["date"] = pd.to_datetime(forecast_df["timestamp"]).dt.date
     daily = forecast_df.groupby("date")[pred_col].agg(["mean", "min", "max"]).reset_index()
 
@@ -132,22 +141,26 @@ def get_forecast_summary(
     )
 
 
-
 # GET /predict/actual-vs-predicted
 
 @router.get("/actual-vs-predicted", summary="Actual vs predicted on test set")
 def get_actual_vs_predicted():
-    """Actual and predicted pairs from test split — for accuracy chart."""
+    """Actual and predicted pairs from the cached test split."""
     try:
-        data                          = prediction_tabular_data()
-        X, y                          = data["X"], data["y"]
-        model, scaler, y_test, y_pred = train(X, y)
+        cache = _require_cache()
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+    y_test     = cache["y_test"]
+    y_pred     = cache["y_pred"]
+    target_col = cache["data"]["target_col"]
+
     return {
-        "target_col"  : data["target_col"],
+        "target_col"  : target_col,
         "total_points": len(y_test),
+        "cached_at"   : model_cache.get_cached_at(),
         "series"      : [
             {
                 "index"    : i,
@@ -159,32 +172,31 @@ def get_actual_vs_predicted():
     }
 
 
-
 # GET /predict/run
 
-@router.get("/run", summary="Full pipeline run using config FORECAST_DAYS")
+@router.get("/run", summary="Full pipeline result from cache")
 def run_pipeline():
-    """Train + forecast in one shot using FORECAST_DAYS from .env config."""
+    """Returns full metrics + forecast summary from the last training run."""
     try:
-        config     = get_config()
-        days_ahead = int(config["FORECAST_DAYS"])
-        data, model, scaler, y_test, y_pred, forecast_df, days_ahead = _get_trained_model(days_ahead)
+        cache = _require_cache()
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    target_col = data["target_col"]
-    pred_col   = f"{target_col}_pred"
+    target_col  = cache["data"]["target_col"]
+    pred_col    = f"{target_col}_pred"
+    metrics     = cache["metrics"]
+    days_ahead  = cache["days_ahead"]
 
+    forecast_df = cache["forecast_df"].copy()
     forecast_df["date"] = pd.to_datetime(forecast_df["timestamp"]).dt.date
     daily = forecast_df.groupby("date")[pred_col].agg(["mean", "min", "max"]).reset_index()
 
     return {
         "target_col": target_col,
-        "metrics": {
-            "mae" : round(float(mean_absolute_error(y_test, y_pred)), 4),
-            "rmse": round(float(np.sqrt(mean_squared_error(y_test, y_pred))), 4),
-            "r2"  : round(float(r2_score(y_test, y_pred)), 4),
-        },
+        "cached_at" : model_cache.get_cached_at(),
+        "metrics"   : metrics,
         "forecast_summary": {
             "days_ahead"    : days_ahead,
             "forecast_start": str(forecast_df["timestamp"].min()),
