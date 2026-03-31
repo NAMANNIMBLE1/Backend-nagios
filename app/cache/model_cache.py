@@ -7,7 +7,7 @@ _store: dict[str, Any] = {}
 
 
 def set_cache(payload: dict) -> None:
-    with _lock:                                          # ← _lock not payload
+    with _lock:                                          
         _store.clear()
         _store.update(payload)
         _store["cached_at"] = datetime.utcnow().isoformat()
