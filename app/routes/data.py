@@ -14,17 +14,15 @@ router = APIRouter(prefix="/data", tags=["Data"])
 
 
 def _require_cache() -> dict:
-    """Raise 503 if the model hasn't been trained yet."""
     if not model_cache.is_ready():
         raise HTTPException(
-            status_code = 503,
-            detail      = "Model not ready — training is still running. Retry in a moment.",
+            status_code=503,
+            detail="Model not ready — training is still running. Retry in a moment.",
         )
     return model_cache.get_cache()
 
 
 # GET /data/raw
-# Still hits DB directly — this is a diagnostic/debug endpoint, not hot path
 
 @router.get("/raw", response_model=RawDataResponse, summary="Raw rows from database")
 def get_raw_data(
@@ -44,11 +42,7 @@ def get_raw_data(
             record[col] = str(val) if not isinstance(val, (int, float, str, type(None))) else val
         records.append(record)
 
-    return RawDataResponse(
-        total_rows = len(rows),
-        columns    = columns,
-        data       = records,
-    )
+    return RawDataResponse(total_rows=len(rows), columns=columns, data=records)
 
 
 # GET /data/processed
@@ -57,18 +51,13 @@ def get_raw_data(
 def get_processed_data():
     cache = _require_cache()
     data  = cache["data"]
-
-    X             = data["X"]
-    y             = data["y"]
-    feature_names = data["feature_names"]
-    target_col    = data["target_col"]
-    metric_cols   = data["metric_cols"]
+    X, y  = data["X"], data["y"]
 
     return ProcessedDataResponse(
         total_rows    = len(X),
-        target_col    = target_col,
-        metric_cols   = metric_cols,
-        feature_names = feature_names,
+        target_col    = data["target_col"],
+        metric_cols   = data["metric_cols"],
+        feature_names = data["feature_names"],
         X_shape       = list(X.shape),
         y_shape       = list(y.shape),
         X_sample      = X[:5].tolist(),
@@ -86,19 +75,22 @@ def get_feature_stats():
     target_col = data["target_col"]
     y          = data["y"]
 
-    freq = int(
-        df_full["check_time"]
-        .sort_values()
-        .diff()
-        .median()
-        .total_seconds() / 60
-    )
+    # ── Fix: compute per-host to avoid zero diffs from interleaved multi-host rows ──
+    freq = 5  # safe fallback
+    if "host_name" in df_full.columns:
+        per_host = (
+            df_full.groupby("host_name")["check_time"]
+            .apply(lambda s: s.sort_values().diff().median())
+            .dropna()
+        )
+        if not per_host.empty:
+            freq = max(1, int(per_host.median().total_seconds() / 60))
+    else:
+        td = df_full["check_time"].sort_values().diff().median()
+        if pd.notna(td):
+            freq = max(1, int(td.total_seconds() / 60))
 
-    hosts = (
-        df_full["host_name"].unique().tolist()
-        if "host_name" in df_full.columns
-        else []
-    )
+    hosts = df_full["host_name"].unique().tolist() if "host_name" in df_full.columns else []
 
     return FeatureStatsResponse(
         target_col              = target_col,
@@ -139,10 +131,7 @@ def get_timeseries(
         "total_points": len(df),
         "cached_at"   : model_cache.get_cached_at(),
         "series"      : [
-            {
-                "timestamp": str(row["check_time"]),
-                "value"    : round(float(row[target_col]), 4),
-            }
+            {"timestamp": str(row["check_time"]), "value": round(float(row[target_col]), 4)}
             for _, row in df.iterrows()
         ],
     }

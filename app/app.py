@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routes import health, data, prediction
+from app.routes import health, data, prediction , routes
 from app.scheduler import start_scheduler, stop_scheduler
 from app.services.training_service import run_training_pipeline  # ← add this
 
@@ -39,7 +39,7 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(data.router)
 app.include_router(prediction.router)
-
+app.include_router(routes.router)
 
 # ── Root ──
 @app.get("/", tags=["Root"])

@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, Query
+from typing import Literal
 import numpy as np
 import pandas as pd
 
@@ -10,32 +11,50 @@ from app.schemas.response import (
     ForecastPoint,
     ForecastSummaryResponse,
     DailyAverage,
+    CombinedSeriesResponse,
+    SeriesPoint,
 )
 
 router = APIRouter(prefix="/predict", tags=["Prediction"])
 
+GranularityT = Literal["5min", "hourly", "6hour", "daily"]
+
+RESAMPLE_RULE = {
+    "5min":  "5min",
+    "hourly": "1h",
+    "6hour":  "6h",
+    "daily":  "1D",
+}
+
+TS_FORMAT = {
+    "5min":  "%d %b %H:%M",
+    "hourly": "%d %b %H:%M",
+    "6hour":  "%d %b %H:%M",
+    "daily":  "%d %b",
+}
+
 
 def _require_cache() -> dict:
-    """Raise 503 if the model hasn't been trained yet."""
     if not model_cache.is_ready():
         raise HTTPException(
-            status_code = 503,
-            detail      = "Model not ready — training is still running. Retry in a moment.",
+            status_code=503,
+            detail="Model not ready — training is still running. Retry in a moment.",
         )
     return model_cache.get_cache()
 
 
 def _get_forecast_df(cache: dict, days: int) -> tuple:
-    """
-    Reuse the cached forecast when days matches what was trained,
-    otherwise re-run forecast() from the cached model (no DB hit).
-    """
     if days == cache["days_ahead"]:
         return cache["forecast_df"], cache["days_ahead"]
 
-    forecast_df, days_ahead = forecast(
-        cache["model"], cache["scaler"], cache["data"], days_ahead=days
-    )
+    # forecast() returns a plain DataFrame, not a tuple
+    result = forecast(cache["model"], cache["scaler"], cache["data"], days_ahead=days)
+    if isinstance(result, tuple):
+        forecast_df, days_ahead = result
+    else:
+        forecast_df = result
+        days_ahead  = days          # use the requested days
+
     return forecast_df, days_ahead
 
 
@@ -43,7 +62,6 @@ def _get_forecast_df(cache: dict, days: int) -> tuple:
 
 @router.get("/metrics", response_model=ModelMetricsResponse, summary="Model evaluation metrics")
 def get_model_metrics():
-    """MAE, RMSE and R² on the 20% held-out test set."""
     try:
         cache   = _require_cache()
         metrics = cache["metrics"]
@@ -68,7 +86,6 @@ def get_model_metrics():
 def get_forecast(
     days: int = Query(default=7, ge=1, le=30, description="Days to forecast ahead")
 ):
-    """Every 5-minute predicted value for the next N days."""
     try:
         cache                   = _require_cache()
         forecast_df, days_ahead = _get_forecast_df(cache, days)
@@ -105,7 +122,6 @@ def get_forecast(
 def get_forecast_summary(
     days: int = Query(default=7, ge=1, le=30, description="Days to forecast ahead")
 ):
-    """One row per day with avg/min/max — lighter payload for dashboards."""
     try:
         cache                   = _require_cache()
         forecast_df, days_ahead = _get_forecast_df(cache, days)
@@ -145,7 +161,6 @@ def get_forecast_summary(
 
 @router.get("/actual-vs-predicted", summary="Actual vs predicted on test set")
 def get_actual_vs_predicted():
-    """Actual and predicted pairs from the cached test split."""
     try:
         cache = _require_cache()
     except HTTPException:
@@ -153,21 +168,13 @@ def get_actual_vs_predicted():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    y_test     = cache["y_test"]
-    y_pred     = cache["y_pred"]
-    target_col = cache["data"]["target_col"]
-
     return {
-        "target_col"  : target_col,
-        "total_points": len(y_test),
+        "target_col"  : cache["data"]["target_col"],
+        "total_points": len(cache["y_test"]),
         "cached_at"   : model_cache.get_cached_at(),
         "series"      : [
-            {
-                "index"    : i,
-                "actual"   : round(float(a), 4),
-                "predicted": round(float(p), 4),
-            }
-            for i, (a, p) in enumerate(zip(y_test, y_pred))
+            {"index": i, "actual": round(float(a), 4), "predicted": round(float(p), 4)}
+            for i, (a, p) in enumerate(zip(cache["y_test"], cache["y_pred"]))
         ],
     }
 
@@ -176,7 +183,6 @@ def get_actual_vs_predicted():
 
 @router.get("/run", summary="Full pipeline result from cache")
 def run_pipeline():
-    """Returns full metrics + forecast summary from the last training run."""
     try:
         cache = _require_cache()
     except HTTPException:
@@ -215,3 +221,61 @@ def run_pipeline():
             for _, row in daily.iterrows()
         ],
     }
+
+
+# GET /predict/combined?granularity=hourly&days=7
+# Returns historical actuals + future forecast resampled to requested granularity.
+# This is the main endpoint for the dashboard chart.
+
+@router.get("/combined", response_model=CombinedSeriesResponse, summary="Historical + forecast combined")
+def get_combined(
+    days: int = Query(default=7, ge=1, le=30, description="Forecast days ahead"),
+    granularity: GranularityT = Query(default="hourly", description="5min | hourly | 6hour | daily"),
+):
+    try:
+        cache                   = _require_cache()
+        forecast_df, days_ahead = _get_forecast_df(cache, days)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    data       = cache["data"]
+    target_col = data["target_col"]
+    df_full    = data["df_full"]
+    df_model   = data["df_model"]
+    pred_col   = f"{target_col}_pred"
+    rule       = RESAMPLE_RULE[granularity]
+    ts_fmt     = TS_FORMAT[granularity]
+
+    # ── Historical: average across all hosts, then resample ──────────────
+    hist = df_full[["check_time"]].copy()
+    hist[target_col] = df_model[target_col].reindex(df_full.index).values
+    hist = hist.dropna(subset=[target_col])
+    hist = hist.set_index("check_time")[target_col]
+    hist = hist.resample(rule).mean().dropna()
+
+    # ── Forecast: resample ────────────────────────────────────────────────
+    fcast = forecast_df.copy()
+    fcast["timestamp"] = pd.to_datetime(fcast["timestamp"])
+    fcast = fcast.set_index("timestamp")[pred_col]
+    fcast = fcast.resample(rule).mean().dropna()
+
+    # More decimals for fine granularity, fewer for coarse
+    decimals = 2 if granularity == "5min" else 1 if granularity == "hourly" else 0
+
+    return CombinedSeriesResponse(
+        target_col     = target_col,
+        granularity    = granularity,
+        days_ahead     = days_ahead,
+        forecast_start = str(forecast_df["timestamp"].min()),
+        cached_at      = model_cache.get_cached_at(),
+        historical     = [
+            SeriesPoint(timestamp=ts.strftime(ts_fmt), value=round(float(v), decimals))
+            for ts, v in hist.items()
+        ],
+        forecast       = [
+            SeriesPoint(timestamp=ts.strftime(ts_fmt), value=round(float(v), decimals))
+            for ts, v in fcast.items()
+        ],
+    )
