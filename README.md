@@ -12,12 +12,16 @@ http://<host>:5000
 
 ```bash
 # Install dependencies
-pip install -r requirements.txt
+install uv package from official site
+uv venv
+source .venv/bin/activate or for windows .venv/Scripts/activate
+uv pip install -r requirements.txt
 
 # Configure environment
-cp .env.example .env
+cp .env
 # fill in your DB credentials
-
+make .env and add db credentials
+ 
 # Run
 uvicorn app.app:app --reload --host 0.0.0.0 --port 5000
 ```
