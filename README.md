@@ -26,18 +26,6 @@ make .env and add db credentials
 uvicorn app.app:app --reload --host 0.0.0.0 --port 5000
 ```
 
-## Environment Variables
-
-| Variable        | Description                        | Example         |
-|-----------------|------------------------------------|-----------------|
-| `DB_HOST`       | MySQL host                         | `10.10.10.245`  |
-| `DB_USER`       | MySQL user                         | `root`          |
-| `DB_PASSWORD`   | MySQL password                     | `Root@123`      |
-| `DB_NAME`       | MySQL database name                | `nagiosdata`    |
-| `FORECAST_DAYS` | Default forecast horizon (days)    | `7`             |
-| `RETRAIN_HOUR`  | UTC hour to retrain daily          | `2`             |
-| `RETRAIN_MINUTE`| UTC minute to retrain daily        | `0`             |
-
 ---
 
 ## How It Works
