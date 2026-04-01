@@ -418,11 +418,4 @@ All endpoints return standard HTTP errors:
 | Debug raw data            | `GET /data/raw`                             |
 
 ---
-
-## Interactive Docs
-
-| URL           | Description       |
-|---------------|-------------------|
-| `/docs`       | Swagger UI        |
-| `/redoc`      | ReDoc             |
-| `/routes/`    | JSON route list   |
+fir more routes info and api visit /routes folder and app.py 
