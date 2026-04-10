@@ -1,25 +1,38 @@
-import pandas as pd
-import numpy as np
-from db.db_connection import get_sql_data
-import re
+"""
+data_processing.py
+~~~~~~~~~~~~~~~~~~
+Feature engineering and dataset preparation.
 
+Main entry point: prediction_tabular_data(host, service, days)
+"""
+
+import re
+import logging
+from typing import Optional
+
+import numpy as np
+import pandas as pd
+
+from db.db_connection import get_sql_data
+
+logger = logging.getLogger(__name__)
+
+
+# ── perfdata parser ───────────────────────────────────────────────────────────
 
 def parse_perfdata(perfdata_str: str) -> dict:
     """
-    Parses Nagios perfdata string into a dict of numeric values.
-    Example input:
-      'power=1240W;1500;1800;0;2000 cooling_capacity=85%;90;95;0;100'
-    Output:
-      {'power': 1240.0, 'cooling_capacity': 85.0}
+    Parse Nagios perfdata string → dict of numeric values.
+
+    Example:
+        'power=1240W;1500;1800;0;2000 cooling_capacity=85%;90;95;0;100'
+        → {'power': 1240.0, 'cooling_capacity': 85.0}
     """
-    result = {}
+    result: dict = {}
     if not perfdata_str or pd.isna(perfdata_str):
         return result
 
-    # Each metric is: label=value[unit][;warn;crit;min;max]
-    pattern = r"([\w\-]+)=([\d.]+)"
-    matches = re.findall(pattern, str(perfdata_str))
-    for key, val in matches:
+    for key, val in re.findall(r"([\w\-]+)=([\d.]+)", str(perfdata_str)):
         try:
             result[key] = float(val)
         except ValueError:
@@ -27,120 +40,159 @@ def parse_perfdata(perfdata_str: str) -> dict:
     return result
 
 
+# ── feature builder ───────────────────────────────────────────────────────────
 
-def build_features(df: pd.DataFrame) -> pd.DataFrame:
+def build_features(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
+    """
+    Enrich raw rows with:
+      - parsed perfdata columns
+      - temporal features
+      - lag / rolling features per metric
+      - warning / critical state flags
+    """
     df = df.copy()
-    df['check_time'] = pd.to_datetime(df['check_time'])
-    df = df.sort_values('check_time').reset_index(drop=True)
+    df["check_time"] = pd.to_datetime(df["check_time"])
+    df = df.sort_values("check_time").reset_index(drop=True)
 
-    # ── Parse perfdata into columns ──
-    parsed = df['perf_data'].apply(parse_perfdata)
+    # ── perfdata → numeric columns ──
+    parsed  = df["perf_data"].apply(parse_perfdata)
     perf_df = pd.json_normalize(parsed)
-    df = pd.concat([df, perf_df], axis=1)
+    df      = pd.concat([df, perf_df], axis=1)
 
-    # Print discovered metric columns
     metric_cols = perf_df.columns.tolist()
-    print(f"[INFO] Parsed perfdata columns: {metric_cols}")
+    logger.info("[FE] Parsed perfdata columns: %s", metric_cols)
 
-    # ── Time-based features ──
-    df['hour']          = df['check_time'].dt.hour
-    df['minute']        = df['check_time'].dt.minute
-    df['day_of_week']   = df['check_time'].dt.dayofweek   # 0=Mon, 6=Sun
-    df['day_of_month']  = df['check_time'].dt.day
-    df['is_weekend']    = (df['day_of_week'] >= 5).astype(int)
+    # ── temporal features ──
+    df["hour"]         = df["check_time"].dt.hour
+    df["minute"]       = df["check_time"].dt.minute
+    df["day_of_week"]  = df["check_time"].dt.dayofweek
+    df["day_of_month"] = df["check_time"].dt.day
+    df["is_weekend"]   = (df["day_of_week"] >= 5).astype(int)
 
-    # ── Time index (numeric) for linear trend ──
-    df['time_index'] = (
-        df['check_time'] - df['check_time'].min()
-    ).dt.total_seconds() / 3600  # hours since first check
+    df["time_index"] = (
+        df["check_time"] - df["check_time"].min()
+    ).dt.total_seconds() / 3600   # hours since first check
 
-    # ── Lag features (previous values) ──
+    # ── lag + rolling per metric ──
     for col in metric_cols:
-        df[f'{col}_lag1']  = df[col].shift(1)   # 5 min ago
-        df[f'{col}_lag3']  = df[col].shift(3)   # 15 min ago
-        df[f'{col}_lag6']  = df[col].shift(6)   # 30 min ago
-        df[f'{col}_lag12'] = df[col].shift(12)  # 1 hour ago
+        df[f"{col}_lag1"]         = df[col].shift(1)
+        df[f"{col}_lag3"]         = df[col].shift(3)
+        df[f"{col}_lag6"]         = df[col].shift(6)
+        df[f"{col}_lag12"]        = df[col].shift(12)
+        df[f"{col}_roll_mean_12"] = df[col].rolling(12).mean()
+        df[f"{col}_roll_std_12"]  = df[col].rolling(12).std()
+        df[f"{col}_roll_mean_36"] = df[col].rolling(36).mean()
+        df[f"{col}_roll_max_12"]  = df[col].rolling(12).max()
 
-        # ── Rolling statistics ──
-        df[f'{col}_roll_mean_12'] = df[col].rolling(12).mean()  # 1hr avg
-        df[f'{col}_roll_std_12']  = df[col].rolling(12).std()   # 1hr volatility
-        df[f'{col}_roll_mean_36'] = df[col].rolling(36).mean()  # 3hr avg
-        df[f'{col}_roll_max_12']  = df[col].rolling(12).max()   # 1hr peak
-
-    # ── State features ──
-    df['is_warning']  = (df['check_state'] == 1).astype(int)
-    df['is_critical'] = (df['check_state'] == 2).astype(int)
+    # ── state flags ──
+    df["is_warning"]  = (df["check_state"] == 1).astype(int)
+    df["is_critical"] = (df["check_state"] == 2).astype(int)
 
     return df, metric_cols
 
 
-def prepare_regression_data(df: pd.DataFrame, target_col: str):
+# ── regression dataset builder ────────────────────────────────────────────────
+
+def prepare_regression_data(
+    df: pd.DataFrame,
+    target_col: str,
+) -> tuple[np.ndarray, np.ndarray, list[str], pd.DataFrame]:
     """
-    target_col: the primary metric to predict (e.g. 'power')
-    Returns: X (features), y (target), feature_names
+    Build X / y arrays from a feature-enriched DataFrame.
+
+    Returns (X, y, feature_names, df_model)
     """
     feature_cols = [
-        'time_index',
-        'hour', 'minute', 'day_of_week', 'day_of_month', 'is_weekend',
-        'is_warning', 'is_critical',
-        f'{target_col}_lag1',
-        f'{target_col}_lag3',
-        f'{target_col}_lag6',
-        f'{target_col}_lag12',
-        f'{target_col}_roll_mean_12',
-        f'{target_col}_roll_std_12',
-        f'{target_col}_roll_mean_36',
-        f'{target_col}_roll_max_12',
+        "time_index",
+        "hour", "minute", "day_of_week", "day_of_month", "is_weekend",
+        "is_warning", "is_critical",
+        f"{target_col}_lag1",
+        f"{target_col}_lag3",
+        f"{target_col}_lag6",
+        f"{target_col}_lag12",
+        f"{target_col}_roll_mean_12",
+        f"{target_col}_roll_std_12",
+        f"{target_col}_roll_mean_36",
+        f"{target_col}_roll_max_12",
     ]
-
-    # Keep only cols that exist
     feature_cols = [c for c in feature_cols if c in df.columns]
 
     df_model = df[feature_cols + [target_col]].dropna()
+    X        = df_model[feature_cols].values
+    y        = df_model[target_col].values
 
-    X = df_model[feature_cols].values
-    y = df_model[target_col].values
-
-    print(f"[INFO] Target        : {target_col}")
-    print(f"[INFO] Features      : {len(feature_cols)}")
-    print(f"[INFO] Training rows : {len(X)}  (dropped {len(df) - len(X)} NaN rows)")
-    print(f"[INFO] y range       : {y.min():.2f} → {y.max():.2f}")
+    logger.info("[FE] Target: %s | features: %d | rows: %d (dropped %d NaN)",
+                target_col, len(feature_cols), len(X), len(df) - len(X))
+    logger.info("[FE] y range: %.2f → %.2f", y.min(), y.max())
 
     return X, y, feature_cols, df_model
 
 
-def prediction_tabular_data():
-    # Load
-    data    = get_sql_data()
-    df_raw  = pd.DataFrame(data["rows"], columns=data["columns"])
-    print(f"[INFO] Raw rows loaded: {len(df_raw)}")
+# ── main entry point ──────────────────────────────────────────────────────────
 
-    # Build features
+def prediction_tabular_data(
+    host:    Optional[str] = None,
+    service: Optional[str] = None,
+    days:    int           = 30,
+) -> dict:
+    """
+    Load raw data from DB for the given (host, service) pair,
+    build features, and return everything needed for training.
+
+    Parameters
+    ----------
+    host    : host alias to filter on  (None → all hosts)
+    service : service display_name     (None → all services, first metric used)
+    days    : days of history to load  (default 30)
+
+    Returns
+    -------
+    {
+        "X", "y", "feature_names", "df_model", "df_full",
+        "target_col", "metric_cols",
+        "host", "service",
+    }
+    """
+    raw = get_sql_data(host=host, service=service, days=days)
+    if not raw["rows"]:
+        raise ValueError(
+            f"No data found for host={host!r}, service={service!r}. "
+            "Check the names match exactly what is stored in nagios_hosts / nagios_services."
+        )
+
+    df_raw = pd.DataFrame(raw["rows"], columns=raw["columns"])
+    logger.info("[DP] Raw rows: %d | host=%s | service=%s", len(df_raw), host, service)
+
     df_feat, metric_cols = build_features(df_raw)
 
-    # ── Pick target: first numeric metric found in perfdata ──
     if not metric_cols:
-        raise ValueError("No numeric metrics found in perfdata — check parse_perfdata()")
+        raise ValueError(
+            f"No numeric metrics parsed from perfdata for host={host!r}, "
+            f"service={service!r}. Check perfdata format."
+        )
 
-    target_col = metric_cols[0]  # swap to 'power' or whatever your col is named
-    print(f"[INFO] Auto-selected target: {target_col}")
+    # When a specific service is requested its first perfdata metric is the target.
+    # Otherwise fall back to the first metric found globally.
+    target_col = metric_cols[0]
+    logger.info("[DP] Auto-selected target: %s", target_col)
 
-    # Prepare regression arrays
     X, y, feature_names, df_model = prepare_regression_data(df_feat, target_col)
 
     return {
-        "X"             : X,
-        "y"             : y,
-        "feature_names" : feature_names,
-        "df_model"      : df_model,
-        "df_full"       : df_feat,
-        "target_col"    : target_col,
-        "metric_cols"   : metric_cols,
+        "X":            X,
+        "y":            y,
+        "feature_names": feature_names,
+        "df_model":     df_model,
+        "df_full":      df_feat,
+        "target_col":   target_col,
+        "metric_cols":  metric_cols,
+        "host":         host,
+        "service":      service,
     }
 
 
 if __name__ == "__main__":
-    result = prediction_tabular_data()
-    X, y   = result["X"], result["y"]
-    print(f"\nX shape: {X.shape}")
-    print(f"y shape: {y.shape}")
+    result = prediction_tabular_data(host="DL-LCP-DX-01", service="LCP-DX_Cooling-Capacity")
+    print(f"X shape: {result['X'].shape}")
+    print(f"y shape: {result['y'].shape}")
+    print(f"Target : {result['target_col']}")

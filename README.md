@@ -1,28 +1,87 @@
+
 # LCP-DX Cooling Capacity Prediction API
 
-REST API for Nagios-based cooling capacity forecasting using Machine Learning.
+## What is this project?
 
-## Base URL
+This project is a **web API** that predicts the cooling capacity of LCP-DX units (air conditioning) using data from a Nagios monitoring database. It uses **machine learning** to forecast future values and help you monitor or plan for cooling needs.
 
-```
-http://<host>:5000
-```
+**You do NOT need to know machine learning or Nagios to use this API!**
 
-## Quick Start
+---
+
+## What is Nagios?
+
+Nagios is a popular open-source tool for monitoring servers, devices, and services. It stores historical data (like temperature, capacity, etc.) in a database. This API reads that data and predicts future values.
+
+---
+
+## What does this API do?
+
+- Reads historical cooling capacity data from your Nagios database
+- Trains a machine learning model to understand patterns
+- Predicts future cooling capacity for the next N days
+- Provides easy-to-use endpoints to get raw data, stats, and forecasts
+
+---
+
+## Who is this for?
+
+- Anyone who wants to forecast cooling capacity using Nagios data
+- Beginners: Just follow the steps below!
+- No Python or ML experience required
+
+---
+
+## Step 1: Prerequisites
+
+- Python 3.10+ installed
+- Access to your Nagios MySQL database (host, user, password, db name)
+
+---
+
+## Step 2: Setup
+
+1. **Clone or download this repository**
+2. **Install dependencies**
+   ```bash
+   pip install -r requirements.txt
+   ```
+3. **Configure environment variables**
+   - Copy the example file:
+     ```bash
+     cp .env.example .env
+     ```
+   - Edit `.env` and fill in your database credentials:
+     ```env
+     DB_HOST=your-db-host
+     DB_USER=your-db-user
+     DB_PASSWORD=your-db-password
+     DB_NAME=your-db-name
+     FORECAST_DAYS=7
+     RETRAIN_HOUR=2
+     RETRAIN_MINUTE=0
+     ```
+
+---
+
+## Step 3: Run the API
 
 ```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# Configure environment
-cp .env.example .env
-# fill in your DB credentials
-
-# Run
 uvicorn app.app:app --reload --host 0.0.0.0 --port 5000
 ```
 
-## Environment Variables
+The API will be available at: [http://localhost:5000](http://localhost:5000)
+
+---
+
+## Step 4: Explore the API (No coding needed!)
+
+- Open your browser and go to [http://localhost:5000/docs](http://localhost:5000/docs) for an interactive Swagger UI.
+- Or use [http://localhost:5000/redoc](http://localhost:5000/redoc) for a documentation view.
+
+---
+
+## Environment Variables Explained
 
 | Variable        | Description                        | Example         |
 |-----------------|------------------------------------|-----------------|
@@ -36,14 +95,101 @@ uvicorn app.app:app --reload --host 0.0.0.0 --port 5000
 
 ---
 
-## How It Works
+## How does it work?
 
-- On startup the model trains automatically and stores everything in memory (cache).
-- All prediction/data endpoints read from cache — **no DB hit per request**.
-- The model retrains once a day at the configured UTC time.
-- `/data/raw` and `/health/` are the only endpoints that hit the DB live.
+1. **On startup:** The API connects to your Nagios database and trains a model using the last 30 days of data.
+2. **Caching:** Most endpoints use cached data for speed. `/data/raw` and `/health/` always fetch live data from the DB.
+3. **Retraining:** The model retrains automatically every day at the time you set in `.env`.
+4. **Predictions:** You can get forecasts for the next N days, at different time granularities (5min, hourly, daily, etc).
 
 ---
+
+## Common Endpoints (What can I do?)
+
+### 1. Check system health
+
+- **GET `/health/`**
+  - Shows if the DB is connected, model is ready, and when retraining will happen.
+
+### 2. Get raw Nagios data
+
+- **GET `/data/raw`**
+  - Returns recent rows from the database (for debugging or exploration).
+
+### 3. Get statistics
+
+- **GET `/data/stats`**
+  - Shows min, max, mean, and other stats for the target metric.
+
+### 4. Get processed features
+
+- **GET `/data/processed`**
+  - Shows the feature matrix and sample data used for training.
+
+### 5. Get a timeseries
+
+- **GET `/data/timeseries?host=DL-LCP-DX-01`**
+  - Returns the full historical timeseries for a host.
+
+### 6. Get a forecast (main chart)
+
+- **GET `/predict/combined?days=7&granularity=hourly`**
+  - Returns both historical and forecasted values for charting.
+
+### 7. Get daily forecast summary
+
+- **GET `/predict/summary?days=7`**
+  - Returns daily averages for the forecast period.
+
+### 8. Get model metrics
+
+- **GET `/predict/metrics`**
+  - Shows how well the model is performing (accuracy, error, etc).
+
+---
+
+## Example: How to get a 7-day forecast
+
+1. Start the API (see above)
+2. Open your browser to [http://localhost:5000/docs](http://localhost:5000/docs)
+3. Find the `/predict/combined` endpoint
+4. Enter `days=7` and `granularity=hourly` (or your choice)
+5. Click "Try it out" and see the results!
+
+---
+
+## Troubleshooting & FAQ
+
+**Q: The API says 'Model not ready — training is still running.'**
+A: Wait 10–30 seconds after startup. The model needs to train on first run. Poll `/health/` until `model_ready: true`.
+
+**Q: I get a DB connection error.**
+A: Double-check your `.env` file for correct DB credentials and network access.
+
+**Q: How do I change the forecast period?**
+A: Use the `days` query parameter in endpoints like `/predict/combined?days=14`.
+
+**Q: How do I see all available endpoints?**
+A: Visit `/docs` or `/routes/` for a full list.
+
+**Q: Can I use this for other Nagios metrics?**
+A: Yes, but you may need to adjust the SQL queries and retrain the model.
+
+---
+
+## Interactive API Docs
+
+| URL           | Description       |
+|---------------|-------------------|
+| `/docs`       | Swagger UI        |
+| `/redoc`      | ReDoc             |
+| `/routes/`    | JSON route list   |
+
+---
+
+## Need help?
+
+Open an issue or ask your question in the project repository!
 
 ## Endpoints
 

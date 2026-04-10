@@ -22,9 +22,7 @@ WHERE
         'DL-LCP-DX-04'
     )
     AND s.display_name = 'LCP-DX_Cooling-Capacity'
-    AND sc.start_time >= (
-        SELECT MAX(start_time) FROM nagios_servicechecks
-    ) - INTERVAL 30 DAY
+     AND sc.start_time >= NOW() - INTERVAL 30 DAY
 ORDER BY
     h.alias ASC,
     sc.start_time ASC;

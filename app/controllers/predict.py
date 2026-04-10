@@ -1,17 +1,31 @@
+"""
+predict.py
+~~~~~~~~~~
+Model training + forecasting helpers.
+The `train()` function is now called from training_service.py.
+`forecast()` is used both there and lazily in the API routes.
+"""
+
+import logging
+from typing import Optional
+
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-# predict.py — line 8
+
 from app.controllers.data_processing import prediction_tabular_data
 from config.get_config import get_config
 
+logger = logging.getLogger(__name__)
+
+
+# ── training ──────────────────────────────────────────────────────────────────
 
 def train(X, y):
-    # Time-ordered split — no shuffle (important for time-series)
+    """Time-ordered train/test split → fit LinearRegression → return artefacts."""
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, shuffle=False
     )
@@ -22,30 +36,39 @@ def train(X, y):
 
     model = LinearRegression()
     model.fit(X_train, y_train)
-
     y_pred = model.predict(X_test)
 
-    print("\n── Model Evaluation ──────────────────────")
-    print(f"   MAE  : {mean_absolute_error(y_test, y_pred):.4f}")
-    print(f"   RMSE : {np.sqrt(mean_squared_error(y_test, y_pred)):.4f}")
-    print(f"   R²   : {r2_score(y_test, y_pred):.4f}")
-    print("──────────────────────────────────────────\n")
+    logger.info(
+        "\n── Model Evaluation ──────────────────────\n"
+        "   MAE  : %.4f\n   RMSE : %.4f\n   R²   : %.4f\n"
+        "──────────────────────────────────────────",
+        mean_absolute_error(y_test, y_pred),
+        np.sqrt(mean_squared_error(y_test, y_pred)),
+        float(r2_score(y_test, y_pred)),
+    )
 
     return model, scaler, y_test, y_pred
 
-# next days forecasting (default value 7 days)
-def forecast(model, scaler, data: dict, days_ahead: int = 7):
+
+# ── forecasting ───────────────────────────────────────────────────────────────
+
+def forecast(model, scaler, data: dict, days_ahead: int = 7) -> pd.DataFrame:
+    """
+    Auto-regressive 5-minute-step forecast for `days_ahead` days.
+
+    Returns a DataFrame with columns [timestamp, {target_col}_pred].
+    """
     df_full      = data["df_full"]
     df_model     = data["df_model"]
     feature_cols = data["feature_names"]
     target_col   = data["target_col"]
 
-    steps      = (days_ahead * 24 * 60) // 5
-    last_time  = df_full["check_time"].max()
-    history    = list(df_model[target_col].values)
+    steps     = (days_ahead * 24 * 60) // 5
+    last_time = df_full["check_time"].max()
+    history   = list(df_model[target_col].values)
 
-    timestamps  = []
-    predictions = []
+    timestamps: list  = []
+    predictions: list = []
 
     for i in range(1, steps + 1):
         next_time = last_time + pd.Timedelta(minutes=5 * i)
@@ -77,75 +100,35 @@ def forecast(model, scaler, data: dict, days_ahead: int = 7):
         predictions.append(y_hat)
 
     forecast_df = pd.DataFrame({
-        "timestamp"          : timestamps,
-        f"{target_col}_pred" : predictions,
+        "timestamp":           timestamps,
+        f"{target_col}_pred":  predictions,
     })
 
-    print(f"[INFO] Forecast steps  : {len(forecast_df)}  ({days_ahead} days)")
-    print(f"[INFO] Forecast range  : {forecast_df[f'{target_col}_pred'].min():.2f}"
-          f" → {forecast_df[f'{target_col}_pred'].max():.2f}")
+    logger.info(
+        "[Forecast] steps=%d (%d days)  range=%.2f → %.2f",
+        len(forecast_df), days_ahead,
+        float(forecast_df[f"{target_col}_pred"].min()),
+        float(forecast_df[f"{target_col}_pred"].max()),
+    )
 
     return forecast_df
 
 
-
-def plot(data: dict, y_test, y_pred, forecast_df: pd.DataFrame):
-    df_full    = data["df_full"]
-    df_model   = data["df_model"]
-    target_col = data["target_col"]
-
-    fig, axes = plt.subplots(2, 1, figsize=(16, 10))
-
-    # ── Actual vs Predicted (test set) ──
-    ax1 = axes[0]
-    ax1.plot(y_test, label="Actual",    color="steelblue", linewidth=1.5)
-    ax1.plot(y_pred, label="Predicted", color="orangered", linewidth=1.5, linestyle="--")
-    ax1.set_title("Actual vs Predicted — Test Set")
-    ax1.set_xlabel("Sample index")
-    ax1.set_ylabel(target_col)
-    ax1.legend()
-    ax1.grid(True, alpha=0.3)
-
-    # ── Historical + Forecast ──
-    ax2 = axes[1]
-    ax2.plot(df_full["check_time"],
-             df_model[target_col].reindex(df_full.index),
-             label="Historical", color="steelblue", linewidth=1.2)
-    ax2.plot(forecast_df["timestamp"],
-             forecast_df[f"{target_col}_pred"],
-             label=f"Forecast ({days_ahead} days)",
-             color="darkorange", linewidth=1.5, linestyle="--")
-    ax2.axvline(x=df_full["check_time"].max(),
-                color="gray", linestyle=":", label="Forecast start")
-    ax2.set_title(f"Power Usage Forecast — {target_col}")
-    ax2.set_xlabel("Time")
-    ax2.set_ylabel(target_col)
-    ax2.legend()
-    ax2.grid(True, alpha=0.3)
-
-    plt.tight_layout()
-    plt.savefig("forecast_output.png", dpi=150)
-    plt.show()
-    print("[INFO] Plot saved → forecast_output.png")
-
+# ── CLI entry point ───────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    # ── Step 1: Load preprocessed data ──
-    data = prediction_tabular_data()
+    import sys
+    host    = sys.argv[1] if len(sys.argv) > 1 else None
+    service = sys.argv[2] if len(sys.argv) > 2 else None
+
+    data = prediction_tabular_data(host=host, service=service)
     X, y = data["X"], data["y"]
 
-    # ── Step 2: Train ──
     model, scaler, y_test, y_pred = train(X, y)
 
-    # ── Step 3: Forecast ──
-    config = get_config()
-    forecast_days = int(config["FORECAST_DAYS"])
-    days_ahead  =   forecast_days # change to 10 for 10-day forecast
-    forecast_df = forecast(model, scaler, data, days_ahead=days_ahead)
+    config        = get_config()
+    forecast_days = int(config.get("FORECAST_DAYS", 7))
+    forecast_df   = forecast(model, scaler, data, days_ahead=forecast_days)
 
-    # ── Step 4: Plot ──
-    plot(data, y_test, y_pred, forecast_df)
-
-    # ── Step 5: Save ──
     forecast_df.to_csv("forecast_output.csv", index=False)
-    print("[INFO] Forecast saved → forecast_output.csv")
+    logger.info("Forecast saved → forecast_output.csv")

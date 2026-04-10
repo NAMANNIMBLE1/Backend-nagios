@@ -8,7 +8,8 @@ class HealthResponse(BaseModel):
     status          : str
     timestamp       : str
     db_connected    : bool
-    model_ready     : bool
+    model_ready     : bool          # True if at least one (host,service) is cached
+    cached_entries  : int           # how many (host,service) pairs are warm
     data_rows       : int
     data_start      : Optional[str] = None
     data_end        : Optional[str] = None
@@ -16,15 +17,43 @@ class HealthResponse(BaseModel):
     next_retrain_at : Optional[str] = None
 
 
+# ── HOSTS / SERVICES ──────────────────────────────────────────────────────────
+
+class HostsResponse(BaseModel):
+    total : int
+    hosts : list[str]
+
+
+class ServicesResponse(BaseModel):
+    host     : str
+    total    : int
+    services : list[str]
+
+
+class CacheEntryInfo(BaseModel):
+    host       : Optional[str]
+    service    : Optional[str]
+    cached_at  : str
+
+
+class CacheStatusResponse(BaseModel):
+    total_cached : int
+    entries      : list[CacheEntryInfo]
+
+
 # ── DATA ──────────────────────────────────────────────────────────────────────
 
 class RawDataResponse(BaseModel):
+    host       : Optional[str]
+    service    : Optional[str]
     total_rows : int
     columns    : list[str]
     data       : list[dict]
 
 
 class ProcessedDataResponse(BaseModel):
+    host          : Optional[str]
+    service       : Optional[str]
     total_rows    : int
     target_col    : str
     metric_cols   : list[str]
@@ -36,6 +65,8 @@ class ProcessedDataResponse(BaseModel):
 
 
 class FeatureStatsResponse(BaseModel):
+    host                    : Optional[str]
+    service                 : Optional[str]
     target_col              : str
     y_min                   : float
     y_max                   : float
@@ -51,6 +82,8 @@ class FeatureStatsResponse(BaseModel):
 # ── PREDICTION ────────────────────────────────────────────────────────────────
 
 class ModelMetricsResponse(BaseModel):
+    host       : Optional[str]
+    service    : Optional[str]
     target_col : str
     mae        : float
     rmse       : float
@@ -65,6 +98,8 @@ class ForecastPoint(BaseModel):
 
 
 class ForecastResponse(BaseModel):
+    host           : Optional[str]
+    service        : Optional[str]
     target_col     : str
     days_ahead     : int
     total_steps    : int
@@ -84,6 +119,8 @@ class DailyAverage(BaseModel):
 
 
 class ForecastSummaryResponse(BaseModel):
+    host           : Optional[str]
+    service        : Optional[str]
     target_col     : str
     days_ahead     : int
     forecast_start : str
@@ -102,6 +139,8 @@ class SeriesPoint(BaseModel):
 
 
 class CombinedSeriesResponse(BaseModel):
+    host           : Optional[str]
+    service        : Optional[str]
     target_col     : str
     granularity    : str
     days_ahead     : int

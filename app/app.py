@@ -1,69 +1,76 @@
 import logging
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routes import health, data, prediction , routes
+from app.routes import health, data, prediction, routes, hosts
 from app.scheduler import start_scheduler, stop_scheduler
-from app.services.training_service import run_training_pipeline  # ← add this
 
 logging.basicConfig(level=logging.INFO)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    try:
-        run_training_pipeline()
-    except Exception as e:
-        logging.error(f"Startup training failed: {e}")
-
+    # No eager training on startup — models are trained lazily on first request
+    # per (host, service) pair.  Use POST /hosts/{host}/services/{svc}/train
+    # to pre-warm specific pairs if desired.
     start_scheduler()
     yield
     stop_scheduler()
 
 
 app = FastAPI(
-    title    = "Power Usage Prediction API",
-    version  = "1.0.0",
+    title    = "Nagios Service Prediction API",
+    version  = "2.0.0",
     docs_url = "/docs",
     redoc_url= "/redoc",
-    lifespan = lifespan,          # ← also make sure lifespan is passed here
+    lifespan = lifespan,
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], allow_credentials=True,
-    allow_methods=["*"], allow_headers=["*"],
+    allow_origins    = ["*"],
+    allow_credentials= True,
+    allow_methods    = ["*"],
+    allow_headers    = ["*"],
 )
 
 app.include_router(health.router)
+app.include_router(hosts.router)
 app.include_router(data.router)
 app.include_router(prediction.router)
 app.include_router(routes.router)
 
-# ── Root ──
+
 @app.get("/", tags=["Root"])
 def root():
     return {
-        "name"   : "Power Usage Prediction API",
-        "version": "1.0.0",
+        "name"   : "Nagios Service Prediction API",
+        "version": "2.0.0",
         "docs"   : "/docs",
         "routes" : {
-            "health"  : [
-                "GET /health/",
+            "health": ["GET /health/"],
+            "hosts" : [
+                "GET  /hosts/",
+                "GET  /hosts/{host_name}/services",
+                "GET  /hosts/cache",
+                "DELETE /hosts/cache?host=&service=",
+                "POST /hosts/{host_name}/services/{service_name}/train",
             ],
-            "data"    : [
-                "GET /data/raw",
-                "GET /data/processed",
-                "GET /data/stats",
-                "GET /data/timeseries",
+            "data"  : [
+                "GET /data/raw?host=&service=",
+                "GET /data/processed?host=&service=",
+                "GET /data/stats?host=&service=",
+                "GET /data/timeseries?host=&service=",
             ],
-            "prediction": [
-                "GET /predict/metrics",
-                "GET /predict/forecast",
-                "GET /predict/summary",
-                "GET /predict/actual-vs-predicted",
-                "GET /predict/run",
+            "predict": [
+                "GET /predict/metrics?host=&service=",
+                "GET /predict/forecast?host=&service=&days=7",
+                "GET /predict/summary?host=&service=&days=7",
+                "GET /predict/actual-vs-predicted?host=&service=",
+                "GET /predict/run?host=&service=",
+                "GET /predict/combined?host=&service=&days=7&granularity=hourly",
             ],
         },
     }
