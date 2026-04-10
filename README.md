@@ -1,7 +1,12 @@
 
 # LCP-DX Cooling Capacity Prediction API
 
+<<<<<<< HEAD
 ## What is this project?
+=======
+REST API for Nagios-based cooling capacity forecasting using Machine Learning.
+for DCIM data centers
+>>>>>>> 36f259d54cb4a00bea0f14434a637bd2b74a5182
 
 This project is a **web API** that predicts the cooling capacity of LCP-DX units (air conditioning) using data from a Nagios monitoring database. It uses **machine learning** to forecast future values and help you monitor or plan for cooling needs.
 
@@ -67,6 +72,7 @@ Nagios is a popular open-source tool for monitoring servers, devices, and servic
 ## Step 3: Run the API
 
 ```bash
+<<<<<<< HEAD
 uvicorn app.app:app --reload --host 0.0.0.0 --port 5000
 ```
 
@@ -93,6 +99,23 @@ The API will be available at: [http://localhost:5000](http://localhost:5000)
 | `RETRAIN_HOUR`  | UTC hour to retrain daily          | `2`             |
 | `RETRAIN_MINUTE`| UTC minute to retrain daily        | `0`             |
 
+=======
+# Install dependencies
+install uv package from official site
+uv venv
+source .venv/bin/activate or for windows .venv/Scripts/activate
+uv pip install -r requirements.txt
+
+# Configure environment
+cp .env
+# fill in your DB credentials
+make .env and add db credentials
+ 
+# Run
+uvicorn app.app:app --reload --host 0.0.0.0 --port 5000
+```
+
+>>>>>>> 36f259d54cb4a00bea0f14434a637bd2b74a5182
 ---
 
 ## How does it work?
@@ -564,11 +587,4 @@ All endpoints return standard HTTP errors:
 | Debug raw data            | `GET /data/raw`                             |
 
 ---
-
-## Interactive Docs
-
-| URL           | Description       |
-|---------------|-------------------|
-| `/docs`       | Swagger UI        |
-| `/redoc`      | ReDoc             |
-| `/routes/`    | JSON route list   |
+fir more routes info and api visit /routes folder and app.py 
