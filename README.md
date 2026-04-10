@@ -1,24 +1,11 @@
 
 # LCP-DX Cooling Capacity Prediction API
 
-<<<<<<< HEAD
-## What is this project?
-=======
-REST API for Nagios-based cooling capacity forecasting using Machine Learning.
+REST API for Nagios-based particular host and services forecasting using Machine Learning.
 for DCIM data centers
->>>>>>> 36f259d54cb4a00bea0f14434a637bd2b74a5182
 
-This project is a **web API** that predicts the cooling capacity of LCP-DX units (air conditioning) using data from a Nagios monitoring database. It uses **machine learning** to forecast future values and help you monitor or plan for cooling needs.
 
-**You do NOT need to know machine learning or Nagios to use this API!**
-
----
-
-## What is Nagios?
-
-Nagios is a popular open-source tool for monitoring servers, devices, and services. It stores historical data (like temperature, capacity, etc.) in a database. This API reads that data and predicts future values.
-
----
+This project is a **web API** that predicts the services usage .
 
 ## What does this API do?
 
@@ -91,9 +78,9 @@ The API will be available at: [http://localhost:5000](http://localhost:5000)
 
 | Variable        | Description                        | Example         |
 |-----------------|------------------------------------|-----------------|
-| `DB_HOST`       | MySQL host                         | `10.10.10.245`  |
-| `DB_USER`       | MySQL user                         | `root`          |
-| `DB_PASSWORD`   | MySQL password                     | `Root@123`      |
+| `DB_HOST`       | MySQL host                         | `10.10.10.1`  |
+| `DB_USER`       | MySQL user                         | `sample`          |
+| `DB_PASSWORD`   | MySQL password                     | `sample23`      |
 | `DB_NAME`       | MySQL database name                | `nagiosdata`    |
 | `FORECAST_DAYS` | Default forecast horizon (days)    | `7`             |
 | `RETRAIN_HOUR`  | UTC hour to retrain daily          | `2`             |
