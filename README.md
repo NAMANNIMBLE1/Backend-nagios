@@ -1,6 +1,5 @@
 # Nagios Service Prediction API
 
-<<<<<<< HEAD
 A FastAPI backend that connects to a Nagios-compatible MySQL database, trains a machine learning model per **(host, service)** pair, and serves historical data alongside multi-day forecasts.
 
 ---
@@ -35,7 +34,7 @@ for DCIM data centers
 
 
 This project is a **web API** that predicts the services usage .
->>>>>>> de8945f6fe55b84f6336e2c85feb76571c75ebdc
+
 
 ## Overview
 
