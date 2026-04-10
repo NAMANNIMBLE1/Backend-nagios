@@ -1,5 +1,5 @@
 
-# LCP-DX Cooling Capacity Prediction API
+# nagios services usage prediction
 
 REST API for Nagios-based particular host and services forecasting using Machine Learning.
 for DCIM data centers
