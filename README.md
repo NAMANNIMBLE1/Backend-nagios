@@ -1,5 +1,6 @@
 # Nagios Service Prediction API
 
+<<<<<<< HEAD
 A FastAPI backend that connects to a Nagios-compatible MySQL database, trains a machine learning model per **(host, service)** pair, and serves historical data alongside multi-day forecasts.
 
 ---
@@ -26,6 +27,15 @@ A FastAPI backend that connects to a Nagios-compatible MySQL database, trains a 
 - [FAQ](#faq)
 
 ---
+=======
+# nagios services usage prediction
+
+REST API for Nagios-based particular host and services forecasting using Machine Learning.
+for DCIM data centers
+
+
+This project is a **web API** that predicts the services usage .
+>>>>>>> de8945f6fe55b84f6336e2c85feb76571c75ebdc
 
 ## Overview
 
@@ -120,10 +130,48 @@ cd backend
 
 **2. Create a virtual environment**
 
+<<<<<<< HEAD
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate        # Linux / macOS
 .venv\Scripts\activate           # Windows
+=======
+---
+
+## Step 4: Explore the API (No coding needed!)
+
+- Open your browser and go to [http://localhost:5000/docs](http://localhost:5000/docs) for an interactive Swagger UI.
+- Or use [http://localhost:5000/redoc](http://localhost:5000/redoc) for a documentation view.
+
+---
+
+## Environment Variables Explained
+
+| Variable        | Description                        | Example         |
+|-----------------|------------------------------------|-----------------|
+| `DB_HOST`       | MySQL host                         | `10.10.10.1`  |
+| `DB_USER`       | MySQL user                         | `sample`          |
+| `DB_PASSWORD`   | MySQL password                     | `sample23`      |
+| `DB_NAME`       | MySQL database name                | `nagiosdata`    |
+| `FORECAST_DAYS` | Default forecast horizon (days)    | `7`             |
+| `RETRAIN_HOUR`  | UTC hour to retrain daily          | `2`             |
+| `RETRAIN_MINUTE`| UTC minute to retrain daily        | `0`             |
+
+=======
+# Install dependencies
+install uv package from official site
+uv venv
+source .venv/bin/activate or for windows .venv/Scripts/activate
+uv pip install -r requirements.txt
+
+# Configure environment
+cp .env
+# fill in your DB credentials
+make .env and add db credentials
+ 
+# Run
+uvicorn app.app:app --reload --host 0.0.0.0 --port 5000
+>>>>>>> de8945f6fe55b84f6336e2c85feb76571c75ebdc
 ```
 
 **3. Install dependencies**
